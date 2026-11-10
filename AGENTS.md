@@ -332,3 +332,13 @@ not an active task queue.
 - Check `LICENSE.md` before redistributing modified builds.
 - Commit completed work with a short descriptive message and the mandatory
   `Agent-Model` trailer defined above.
+
+## Battlewire web integration
+
+For Battlewire integration work, read and follow `docs/web-port-architecture.md`
+in the Battlewire checkout for the current task. Its canonical repository
+location is [Battlewire web port architecture](https://github.com/josephdriver/battlewire/blob/main/docs/web-port-architecture.md).
+Use the local task checkout while changes are awaiting integration. Keep shared
+architecture rules there and engine-specific APIs and build instructions here.
+These integration rules apply to the Battlewire fork; they do not require
+publishing integration-only changes to the upstream NewShoes project.
