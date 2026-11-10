@@ -50,6 +50,10 @@
 //-----------------------------------------------------------------------------
 // USER INCLUDES //////////////////////////////////////////////////////////////
 //-----------------------------------------------------------------------------
+#ifdef __EMSCRIPTEN__
+extern "C" int cnc_port_real_engine_request_host_exit();
+#endif
+
 #include "PreRTS.h"	// This must go first in EVERY cpp file int the GameEngine
 
 #include "Common/AudioAffect.h"
@@ -732,6 +736,11 @@ WindowMsgHandledType ScoreScreenSystem( GameWindow *window, UnsignedInt msg,
 			Int controlID = control->winGetWindowId();
 			if( controlID == buttonOkID )
 			{
+#ifdef __EMSCRIPTEN__
+                // Keep the original result screens until the player chooses Exit.
+                if (screenType == SCORESCREEN_SKIRMISH && cnc_port_real_engine_request_host_exit())
+                    return MSG_HANDLED;
+#endif
 				TheShell->pop();
 				TheCampaignManager->setCampaign(AsciiString::TheEmptyString);
 			}

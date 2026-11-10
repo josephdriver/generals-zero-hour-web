@@ -84,6 +84,8 @@
 #include "GameClient/WinInstanceData.h"
 #include "GameClient/WindowLayout.h"
 #include "GameNetwork/GameInfo.h"
+#include "Common/RandomValue.h"
+#include <sstream>
 #include "GameNetwork/GameSpy/ThreadUtils.h"
 #include "wasm_browser_mouse.h"
 #include "GameLogic/AI.h"
@@ -937,6 +939,8 @@ struct RealEngineInitState {
 };
 
 RealEngineInitState g_state;
+bool g_direct_skirmish_active = false;
+bool g_direct_skirmish_exit_requested = false;
 std::string g_state_json;
 // Opt-in only: default boots stay -noshellmap so harness expectations hold;
 // the human play page can request the original ShellMapMD menu background.
@@ -8994,6 +8998,132 @@ extern "C" EMSCRIPTEN_KEEPALIVE const char *cnc_port_real_engine_lan_command(
 	append_lan_runtime_json(json);
 	json += "}}";
 	return json.c_str();
+}
+
+
+// Native stats-screen Exit is routed to an embedding host only for direct launches.
+extern "C" int cnc_port_real_engine_request_host_exit()
+{
+    if (!g_direct_skirmish_active) return 0;
+    g_direct_skirmish_exit_requested = true;
+    return 1;
+}
+
+// A read-only lifecycle signal: polling must never advance simulation frames.
+extern "C" EMSCRIPTEN_KEEPALIVE const char *cnc_port_real_engine_skirmish_status()
+{
+    static std::string json;
+    const bool in_game = TheGameLogic && TheGameLogic->isInGame()
+        && TheGameLogic->getGameMode() == GAME_SKIRMISH;
+    const bool loading = TheGameLogic && (TheGameLogic->isLoadSessionActive() || TheGameLogic->isLoadingMap());
+    const bool ready = in_game && !loading && TheGameLogic->getFrame() > 0;
+    json = "{\"ok\":true,\"ready\":";
+    json += ready ? "true" : "false";
+    json += ",\"exitRequested\":";
+    json += g_direct_skirmish_exit_requested ? "true" : "false";
+    json += ",\"loading\":";
+    json += loading ? "true" : "false";
+    json += ",\"logicFrame\":" + std::to_string(TheGameLogic ? TheGameLogic->getFrame() : 0);
+    json += ",\"loadProgress\":" + std::to_string(TheGameLogic ? TheGameLogic->getLoadSessionProgress() : 0);
+    json += ",\"failed\":";
+    json += g_frame_state.exception_caught ? "true" : "false";
+    json += "}";
+    return json.c_str();
+}
+
+// Battlewire's adapter supplies the same GameInfo used by the original menu.
+// Validate the entire roster before modifying engine state.
+extern "C" EMSCRIPTEN_KEEPALIVE const char *cnc_port_real_engine_start_skirmish(
+    const char *map, const char *commander, Int seed, Int cash, Int fps,
+    Int limit_superweapons, const char *roster)
+{
+    static std::string json;
+    auto fail = [&](const char *reason) -> const char * {
+        json = std::string("{\"ok\":false,\"error\":\"") + reason + "\"}";
+        return json.c_str();
+    };
+    if (!TheMapCache || !TheGameLogic || !TheMessageStream || !TheWritableGlobalData || !ThePlayerTemplateStore)
+        return fail("engineNotReady");
+    if (TheGameLogic->isInGame() || (TheSkirmishGameInfo && TheSkirmishGameInfo->isGameInProgress()))
+        return fail("matchAlreadyStarted");
+    if (!map || !roster || cash < 1000 || cash > 50000 || fps < 15 || fps > 60)
+        return fail("invalidSettings");
+    AsciiString key(map);
+    key.toLower();
+    MapCache::const_iterator metadata = TheMapCache->find(key);
+    if (metadata == TheMapCache->end() || !metadata->second.m_isMultiplayer)
+        return fail("mapUnavailable");
+    std::vector<GameSlot> slots;
+    std::istringstream rows(roster);
+    std::string row;
+    bool colors[8] = {}, starts[8] = {};
+    while (std::getline(rows, row)) {
+        std::istringstream fields(row);
+        std::string faction, extra;
+        Int color, position, team, difficulty;
+        if (!(fields >> faction >> color >> position >> team >> difficulty) || (fields >> extra)
+            || slots.size() >= 8 || color < -1 || color > 7 || position < -1
+            || position >= metadata->second.m_numPlayers || team < -1 || team > 7
+            || (slots.empty() ? difficulty != -1 : difficulty < 0 || difficulty > 2))
+            return fail("invalidRoster");
+        Int template_index = PLAYERTEMPLATE_RANDOM;
+        if (faction != "Random") {
+            const PlayerTemplate *player = find_player_template_by_name(faction.c_str(), &template_index);
+            if (!player || !player->isPlayableSide()) return fail("invalidFaction");
+        }
+        if ((color >= 0 && colors[color]) || (position >= 0 && starts[position]))
+            return fail("duplicateRosterChoice");
+        if (color >= 0) colors[color] = true;
+        if (position >= 0) starts[position] = true;
+        UnicodeString name;
+        name.translate(slots.empty() && commander ? commander : "Computer");
+        GameSlot slot;
+        slot.setState(slots.empty() ? SLOT_PLAYER : static_cast<SlotState>(SLOT_EASY_AI + difficulty),
+            name, slots.empty() ? 0x0100007f : 0);
+        slot.setPlayerTemplate(template_index);
+        slot.setColor(color);
+        slot.setStartPos(position);
+        slot.setTeamNumber(team);
+        slot.setMapAvailability(TRUE);
+        slot.setAccept();
+        slots.push_back(slot);
+    }
+    if (slots.size() < 2 || slots.size() > static_cast<unsigned>(metadata->second.m_numPlayers))
+        return fail("invalidPlayerCount");
+    if (!TheSkirmishGameInfo) TheSkirmishGameInfo = new SkirmishGameInfo;
+    TheSkirmishGameInfo->reset();
+    TheSkirmishGameInfo->setLocalIP(0x0100007f);
+    TheSkirmishGameInfo->enterGame();
+    for (unsigned i = 0; i < slots.size(); ++i) TheSkirmishGameInfo->setSlot(i, slots[i]);
+    TheSkirmishGameInfo->setMap(metadata->first);
+    TheSkirmishGameInfo->setMapCRC(metadata->second.m_CRC);
+    TheSkirmishGameInfo->setMapSize(metadata->second.m_filesize);
+    TheSkirmishGameInfo->setSeed(seed);
+    Money money;
+    money.deposit(cash, FALSE);
+    TheSkirmishGameInfo->setStartingCash(money);
+    TheSkirmishGameInfo->setSuperweaponRestriction(limit_superweapons ? 1 : 0);
+    g_direct_skirmish_active = true;
+    g_direct_skirmish_exit_requested = false;
+    // Direct callers have not navigated through the menu stack. Dispose its
+    // layouts before dispatching the normal match-start message so menu input
+    // handlers and logo windows cannot remain over the battlefield.
+    if (TheShell) {
+        TheShell->hideShell();
+        while (TheShell->top()) TheShell->popImmediate();
+    }
+    TheWritableGlobalData->m_mapName = metadata->first;
+    TheSkirmishGameInfo->startGame(0);
+    InitGameLogicRandom(seed);
+    GameMessage *message = TheMessageStream->appendMessage(GameMessage::MSG_NEW_GAME);
+    message->appendIntegerArgument(GAME_SKIRMISH);
+    message->appendIntegerArgument(DIFFICULTY_NORMAL);
+    message->appendIntegerArgument(0);
+    message->appendIntegerArgument(fps);
+    json = "{\"ok\":true";
+    append_game_info_json(json, "skirmishGameInfo", TheSkirmishGameInfo);
+    json += "}";
+    return json.c_str();
 }
 
 extern "C" EMSCRIPTEN_KEEPALIVE const char *cnc_port_real_engine_set_skirmish_map(const char *map_name)

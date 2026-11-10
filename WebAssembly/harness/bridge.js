@@ -294,7 +294,7 @@ setNetworkDiagnosticsEnabled(storedNetworkDiagnostics, {
   reason: "settings-load",
 });
 
-const canvas = document.querySelector("#viewport");
+const canvas = document.querySelector("[data-cnc-viewport]") ?? document.querySelector("#viewport");
 // preserveDrawingBuffer forces the compositor to COPY the drawing buffer every
 // frame instead of swapping it (an extra full-framebuffer blit per frame on
 // tile-based GPUs like Apple Silicon). Harness pages need it so screenshots /
@@ -376,8 +376,7 @@ function selectedCncPortDistDir() {
 
 function browserAssetUrl(path, cacheToken = "") {
   try {
-    const base = (typeof document !== "undefined" ? document.baseURI : undefined)
-      ?? globalThis.location?.href;
+    const base = new URL(".", import.meta.url).href;
     const url = new URL(path, base);
     if (cacheToken) {
       url.searchParams.set("v", cacheToken);
@@ -2959,6 +2958,28 @@ async function threadedRpc(command, payload = {}) {
           "cnc_port_query_window_by_name", "string", ["string"],
           [String(payload.name ?? payload.window ?? payload.windowName ?? "")]);
         return { ok: result?.found === true, command, result, threaded: true };
+      } catch (error) {
+        return { ok: false, command, error: error?.message ?? String(error), threaded: true };
+      }
+    }
+    case "realEngineSkirmishStatus": {
+      try {
+        const result = await threadedEngine.engineCall(
+          "cnc_port_real_engine_skirmish_status", "string", [], []);
+        return { ok: result?.ok === true, command, result, threaded: true };
+      } catch (error) {
+        return { ok: false, command, error: error?.message ?? String(error), threaded: true };
+      }
+    }
+    case "realEngineStartSkirmish": {
+      try {
+        const result = await threadedEngine.engineCall(
+          "cnc_port_real_engine_start_skirmish", "string",
+          ["string", "string", "number", "number", "number", "number", "string"],
+          [String(payload.map), String(payload.commanderName), Number(payload.seed),
+            Number(payload.startingCash), Number(payload.gameSpeed), payload.limitSuperweapons ? 1 : 0,
+            String(payload.roster)]);
+        return { ok: result?.ok === true, command, result, threaded: true };
       } catch (error) {
         return { ok: false, command, error: error?.message ?? String(error), threaded: true };
       }
@@ -6857,6 +6878,10 @@ async function loadWasmModule() {
         ["string"],
       ),
       mapCacheProbe: module.cwrap("cnc_port_map_cache_probe", "string", []),
+      realEngineStartSkirmish: module.cwrap(
+        "cnc_port_real_engine_start_skirmish", "string",
+        ["string", "string", "number", "number", "number", "number", "string"],
+      ),
       realEngineSetSkirmishMap: module.cwrap(
         "cnc_port_real_engine_set_skirmish_map",
         "string",
