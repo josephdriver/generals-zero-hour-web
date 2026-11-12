@@ -66,6 +66,10 @@ typedef UnsignedShort ReplayWideChar;
 static_assert(sizeof(ReplayTime) == 4, "Replay timestamps must remain 32-bit");
 static_assert(sizeof(ReplayWideChar) == 2, "Replay text units must remain UTF-16");
 
+#ifdef __EMSCRIPTEN__
+extern "C" Bool cnc_port_browser_match_uses_host_loading();
+#endif
+
 static void deleteCRCInfo(CRCInfo *info);
 
 static time_t startTime;
@@ -658,7 +662,13 @@ void RecorderClass::startRecording(GameDifficulty diff, Int originalGameMode, In
 		{
 			GameInfo *game = TheLAN->GetMyGame();
 			DEBUG_ASSERTCRASH(game, ("Starting a LAN game with no LANGameInfo object!"));
+			// A hosted browser match writes these options to disk. Its roster is
+			// already agreed on and never travels in a native LAN lobby packet.
+#ifdef __EMSCRIPTEN__
+			theSlotList = GameInfoToAsciiString(game, !cnc_port_browser_match_uses_host_loading());
+#else
 			theSlotList = GameInfoToAsciiString(game);
+#endif
 
 			for (Int i=0; i<MAX_SLOTS; ++i)
 			{

@@ -55,6 +55,10 @@
 #include "GameLogic/Module/DozerAIUpdate.h"
 #include "GameClient/InGameUI.h"
 
+#ifdef __EMSCRIPTEN__
+extern "C" void cnc_port_browser_match_money(Player *player, UnsignedInt amount, Bool harvested);
+#endif
+
 #ifdef _INTERNAL
 // for occasional debugging...
 //#pragma optimize("", off)
@@ -1705,7 +1709,12 @@ Object *DozerAIUpdate::construct( const ThingTemplate *what,
 	{
 		Money *money = owningPlayer->getMoney();
 
-		money->withdraw( what->calcCostToBuild( owningPlayer ) );
+		#ifdef __EMSCRIPTEN__
+        const UnsignedInt spent = money->withdraw( what->calcCostToBuild( owningPlayer ) );
+        cnc_port_browser_match_money(owningPlayer, spent, FALSE);
+#else
+        money->withdraw( what->calcCostToBuild( owningPlayer ) );
+#endif
 
 	}  // end if	
 

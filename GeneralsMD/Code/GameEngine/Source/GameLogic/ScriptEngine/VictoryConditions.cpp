@@ -53,6 +53,8 @@
 #ifdef __EMSCRIPTEN__
 extern "C" void cnc_port_capture_llm_ai_player_defeat(Int slot_num);
 extern "C" void cnc_port_capture_llm_ai_terminal_outcomes(void);
+extern "C" void cnc_port_capture_browser_match_defeat(Int slot_num, Player *player);
+extern "C" void cnc_port_capture_browser_match_result();
 extern "C" void cnc_port_reset_llm_ai_terminal_outcomes(void);
 #endif
 #include "GameNetwork/GameInfo.h"
@@ -230,6 +232,9 @@ void VictoryConditions::update( void )
 				if (p->getPlayerNameKey() == NAMEKEY(pName))
 				{
 					GameSlot *slot = (TheGameInfo)?TheGameInfo->getSlot(idx):NULL;
+#ifdef __EMSCRIPTEN__
+					cnc_port_capture_browser_match_defeat(idx, p);
+#endif
 					if (slot && slot->isAI())
 					{
 						DEBUG_LOG(("Marking AI player %s as defeated\n", pName.str()));
@@ -265,8 +270,10 @@ void VictoryConditions::update( void )
 	}
 
 #ifdef __EMSCRIPTEN__
-	if (terminalStarted)
+	if (terminalStarted) {
 		cnc_port_capture_llm_ai_terminal_outcomes();
+		cnc_port_capture_browser_match_result();
+	}
 #endif
 }
 

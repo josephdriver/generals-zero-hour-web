@@ -56,6 +56,10 @@
 #include "GameLogic/Module/ProductionUpdate.h"
 #include "GameClient/TerrainVisual.h"	
 
+#ifdef __EMSCRIPTEN__
+extern "C" void cnc_port_browser_match_money(Player *player, UnsignedInt amount, Bool harvested);
+#endif
+
 #ifdef _INTERNAL
 // for occasional debugging...
 //#pragma optimize("", off)
@@ -291,7 +295,12 @@ void AISkirmishPlayer::processBaseBuilding( void )
 				if (m_player->getMoney()->countMoney() >= cost)
 				{
 					// we have the money, deduct it
-					m_player->getMoney()->withdraw( cost );
+					#ifdef __EMSCRIPTEN__
+        const UnsignedInt spent = m_player->getMoney()->withdraw( cost );
+        cnc_port_browser_match_money(m_player, spent, FALSE);
+#else
+        m_player->getMoney()->withdraw( cost );
+#endif
 
 					// inst-construct the building
 					bldg = buildStructureNow(bldgPlan, info, NULL);

@@ -1711,6 +1711,9 @@ void Player::repairStructure(ObjectID structureID)
 //-------------------------------------------------------------------------------------------------
 /** A unit was just created and is ready to control */
 //-------------------------------------------------------------------------------------------------
+#ifdef __EMSCRIPTEN__
+extern "C" void cnc_port_browser_match_produced(Player *player, const Object *object, Bool building);
+#endif
 void Player::onUnitCreated( Object *factory, Object *unit )
 {
 	CNC_PORT_NOTE_PLAYER_STRUCTURE_STEP("Player.onUnitCreated.entry");
@@ -1724,6 +1727,9 @@ void Player::onUnitCreated( Object *factory, Object *unit )
 	// increment our scorekeeper
 	CNC_PORT_NOTE_PLAYER_STRUCTURE_STEP("Player.onUnitCreated.scoreBuilt.before");
 	m_scoreKeeper.addObjectBuilt(unit);
+#ifdef __EMSCRIPTEN__
+	if (factory) cnc_port_browser_match_produced(this, unit, FALSE);
+#endif
 	CNC_PORT_NOTE_PLAYER_STRUCTURE_STEP("Player.onUnitCreated.scoreBuilt.after");
 
 	// ai notification callback
@@ -1826,6 +1832,9 @@ void Player::onStructureConstructionComplete( Object *builder, Object *structure
 	if (isRebuild == FALSE) {
 		CNC_PORT_NOTE_PLAYER_STRUCTURE_STEP("Player.onStructureConstructionComplete.scoreBuilt.before");
 		m_scoreKeeper.addObjectBuilt(structure);
+#ifdef __EMSCRIPTEN__
+		if (builder) cnc_port_browser_match_produced(this, structure, TRUE);
+#endif
 		CNC_PORT_NOTE_PLAYER_STRUCTURE_STEP("Player.onStructureConstructionComplete.scoreBuilt.after");
 		CNC_PORT_NOTE_PLAYER_STRUCTURE_STEP("Player.onStructureConstructionComplete.scoreSpent.before");
 		m_scoreKeeper.addMoneySpent(structure->getTemplate()->calcCostToBuild(this));

@@ -170,6 +170,10 @@ public:
 
 	LANAPI();
 	virtual ~LANAPI();
+#ifdef __EMSCRIPTEN__
+	// The embedding site has already synchronized this sealed LAN roster.
+	Bool startBrowserMatch(LANGameInfo *game, UnsignedInt localIP);
+#endif
 
 	virtual void init( void );															///< Initialize or re-initialize the instance
 	virtual void reset( void );															///< reset the logic system

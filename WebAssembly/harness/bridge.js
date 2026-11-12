@@ -204,8 +204,12 @@ const cncPortWebXrVrRequested = (() => {
     return false;
   }
 })();
+// Hosted matches can receive bursts from seven peers during native loading.
+// Their 482-byte datagrams fit in a smaller slot, so the larger queue uses
+// the same payload memory as the standard browser transport queue.
+const hostedMultiplayer = document.querySelector("[data-cnc-hosted-multiplayer]") !== null;
 const threadedUdpBridge = cncPortThreadedMode && typeof SharedArrayBuffer === "function"
-  ? createSharedUdpBridge()
+  ? createSharedUdpBridge(hostedMultiplayer ? { capacity: 1024, maxBytes: 512 } : {})
   : null;
 if (threadedUdpBridge) {
   writeSharedMultiplayerNetworkStatus(threadedUdpBridge.networkStatus,
@@ -3065,6 +3069,23 @@ async function threadedRpc(command, payload = {}) {
         return { ok: false, command, error: error?.message ?? String(error), threaded: true };
       }
     }
+    case "realEngineStartBrowserMatch":
+    case "realEngineBrowserMatchSurrender":
+    case "realEngineBrowserMatchStatus": {
+      try {
+        const start = command === "realEngineStartBrowserMatch";
+        const result = await threadedEngine.engineCall(
+          start ? "cnc_port_real_engine_start_browser_match"
+            : command === "realEngineBrowserMatchSurrender" ? "cnc_port_real_engine_browser_match_surrender"
+            : "cnc_port_real_engine_browser_match_status",
+          "string", start ? ["string", "number", "number", "number", "number", "string"] : [],
+          start ? [payload.map, payload.seed, payload.startingCash,
+            Number(payload.limitSuperweapons), payload.localIp, payload.roster] : []);
+        return { ok: result?.ok === true, command, result, threaded: true };
+      } catch (error) {
+        return { ok: false, command, error: error?.message ?? String(error), threaded: true };
+      }
+    }
     case "realEngineLanState": {
       try {
         const state = await threadedEngine.engineCall(
@@ -3735,7 +3756,10 @@ function publishBrowserWebRtcNativeStatus({ phase = null, endpoint = null, error
         : state?.discoveryConnected === true
           ? MULTIPLAYER_NETWORK_LIFECYCLE.DISCOVERY_ONLINE
           : MULTIPLAYER_NETWORK_LIFECYCLE.OFFLINE;
-  const text = formatMultiplayerNetworkStatus({
+  const hosted = !!browserWebRtcUdpEndpointRuntime.configuration?.createEndpoint;
+  const text = hosted
+    ? (error ?? `Battlewire: ${openPeers}/${state?.peerCount ?? 0} peer connections`)
+    : formatMultiplayerNetworkStatus({
     phase: effectivePhase,
     endpoint: state,
     configuration: browserWebRtcUdpEndpointRuntime.configuration,
@@ -3803,7 +3827,7 @@ function resetBrowserWebRtcUdpEndpointRuntime({
   return closePromise;
 }
 
-function summarizeBrowserWebRtcUdpEndpointRuntime() {
+function summarizeBrowserWebRtcUdpEndpointRuntime({ includePackets = true } = {}) {
   const endpointState = browserWebRtcUdpEndpointRuntime.endpoint?.snapshot() ?? null;
   return {
     source: browserWebRtcUdpEndpointRuntime.source,
@@ -3827,7 +3851,7 @@ function summarizeBrowserWebRtcUdpEndpointRuntime() {
     lastSent: browserWebRtcUdpEndpointRuntime.lastSent,
     lastReceived: browserWebRtcUdpEndpointRuntime.lastReceived,
     lastDelivered: browserWebRtcUdpEndpointRuntime.lastDelivered,
-    eventLog: [...browserWebRtcUdpEndpointRuntime.eventLog],
+    ...(includePackets ? { eventLog: [...browserWebRtcUdpEndpointRuntime.eventLog] } : {}),
     lastError: browserWebRtcUdpEndpointRuntime.lastError ?? endpointState?.lastError ?? null,
     connectionGeneration: browserWebRtcUdpEndpointRuntime.connectionGeneration,
     peerGeneration: browserWebRtcUdpEndpointRuntime.peerGeneration,
@@ -3843,6 +3867,7 @@ async function connectBrowserWebRtcUdpEndpoint({
   displayName,
   iceServers,
   relayUrls,
+  createEndpoint,
   timeoutMs = 20000,
 }) {
   const previousRoom = browserWebRtcUdpEndpointRuntime.configuration?.room ?? null;
@@ -3853,13 +3878,14 @@ async function connectBrowserWebRtcUdpEndpoint({
     iceServers: Array.isArray(iceServers) ? [...iceServers] : [],
     relayUrls: Array.isArray(relayUrls) ? [...relayUrls] : null,
     timeoutMs: Number(timeoutMs) || 20000,
+    createEndpoint,
   };
   if (previousRoom !== configuration.room) browserWebRtcUdpEndpointRuntime.peerMetadata = [];
   browserWebRtcUdpEndpointRuntime.configuration = configuration;
   await resetBrowserWebRtcUdpEndpointRuntime({ preserveConfiguration: true });
   browserWebRtcUdpEndpointRuntime.lastError = null;
   publishBrowserWebRtcNativeStatus({ phase: "connecting" });
-  const endpoint = createWebRtcUdpEndpoint({
+  const endpoint = (createEndpoint ?? createWebRtcUdpEndpoint)({
     ...configuration,
     knownPeerMetadata: browserWebRtcUdpEndpointRuntime.peerMetadata,
     onDatagram: (datagram) => {
@@ -3884,15 +3910,17 @@ async function connectBrowserWebRtcUdpEndpoint({
       } else {
         browserWebRtcUdpEndpointRuntime.incoming.push(datagram);
       }
-      browserWebRtcUdpEndpointRuntime.lastReceived = browserUdpWireSummary(
-        datagram.bytes, datagram.ip, datagram.port);
-      browserWebRtcUdpEndpointRuntime.eventLog.push({
-        phase: "udp-read-webrtc-queue",
-        peerId: datagram.peerId,
-        destinationIp: datagram.destinationIp,
-        destinationPort: datagram.destinationPort,
-        ...browserWebRtcUdpEndpointRuntime.lastReceived,
-      });
+      if (!createEndpoint) {
+        browserWebRtcUdpEndpointRuntime.lastReceived = browserUdpWireSummary(
+          datagram.bytes, datagram.ip, datagram.port);
+        browserWebRtcUdpEndpointRuntime.eventLog.push({
+          phase: "udp-read-webrtc-queue",
+          peerId: datagram.peerId,
+          destinationIp: datagram.destinationIp,
+          destinationPort: datagram.destinationPort,
+          ...browserWebRtcUdpEndpointRuntime.lastReceived,
+        });
+      }
     },
     onStateChange: (state) => {
       browserWebRtcUdpEndpointRuntime.lastError = state.lastError;
@@ -3931,6 +3959,7 @@ async function reconnectBrowserWebRtcUdpEndpoint() {
     return browserWebRtcUdpEndpointRuntime.reconnectPromise;
   }
   const configuration = browserWebRtcUdpEndpointRuntime.configuration;
+  if (configuration?.createEndpoint) return { ok: false, error: "Embedded matches do not reconnect." };
   if (!configuration?.room) {
     const error = "No Anonymous room is configured";
     browserWebRtcUdpEndpointRuntime.lastError = error;
@@ -3984,13 +4013,15 @@ function cncPortBrowserWebRtcUdpSend({
     bridgeQueuedAtUs,
   });
   if (written > 0) {
-    browserWebRtcUdpEndpointRuntime.lastSent = browserUdpWireSummary(datagram, ip >>> 0, port & 0xffff);
-    browserWebRtcUdpEndpointRuntime.eventLog.push({
-      phase: "udp-write-webrtc-send",
-      sourceIp: sourceIp >>> 0,
-      sourcePort: sourcePort & 0xffff,
-      ...browserWebRtcUdpEndpointRuntime.lastSent,
-    });
+    if (!browserWebRtcUdpEndpointRuntime.configuration?.createEndpoint) {
+      browserWebRtcUdpEndpointRuntime.lastSent = browserUdpWireSummary(datagram, ip >>> 0, port & 0xffff);
+      browserWebRtcUdpEndpointRuntime.eventLog.push({
+        phase: "udp-write-webrtc-send",
+        sourceIp: sourceIp >>> 0,
+        sourcePort: sourcePort & 0xffff,
+        ...browserWebRtcUdpEndpointRuntime.lastSent,
+      });
+    }
     browserWebRtcUdpEndpointRuntime.lastError = null;
   } else if (written < 0) {
     browserWebRtcUdpEndpointRuntime.lastError = endpoint.snapshot().lastError;
@@ -25922,6 +25953,9 @@ function stopWebXrSession(reason = "requested") {
 
 window.CnCPort = {
   rpc,
+  connectHostedMatchTransport: connectBrowserWebRtcUdpEndpoint,
+  closeHostedMatchTransport: () => resetBrowserWebRtcUdpEndpointRuntime({ preserveConfiguration: false }),
+  hostedMatchTransportState: () => summarizeBrowserWebRtcUdpEndpointRuntime({ includePackets: false }),
   state: harnessState,
   connectAgentBridge,
   disconnectAgentBridge,
