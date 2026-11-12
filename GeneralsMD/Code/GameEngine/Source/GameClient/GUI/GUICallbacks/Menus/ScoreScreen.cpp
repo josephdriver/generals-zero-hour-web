@@ -738,7 +738,8 @@ WindowMsgHandledType ScoreScreenSystem( GameWindow *window, UnsignedInt msg,
 			{
 #ifdef __EMSCRIPTEN__
                 // Keep the original result screens until the player chooses Exit.
-                if (screenType == SCORESCREEN_SKIRMISH && cnc_port_real_engine_request_host_exit())
+                if ((screenType == SCORESCREEN_SKIRMISH || screenType == SCORESCREEN_LAN)
+                    && cnc_port_real_engine_request_host_exit())
                     return MSG_HANDLED;
 #endif
 				TheShell->pop();

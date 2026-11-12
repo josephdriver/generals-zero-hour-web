@@ -280,6 +280,10 @@ LoadScreen::~LoadScreen( void )
 	m_loadScreen = NULL;
 }
 
+#ifdef __EMSCRIPTEN__
+extern "C" Bool cnc_port_browser_match_uses_host_loading();
+#endif
+
 void LoadScreen::update( Int percent )
 {
 	TheGameEngine->serviceWindowsOS();
@@ -288,8 +292,12 @@ void LoadScreen::update( Int percent )
 
 	TheWindowManager->update();
 	TheDisplay->update();
-	// redraw all views, update the GUI
-	TheDisplay->draw();
+	// Battlewire presents its own progress screen over the hidden canvas.
+	// Keep native input servicing, load messages and the FP setup intact.
+#ifdef __EMSCRIPTEN__
+	if (!cnc_port_browser_match_uses_host_loading())
+#endif
+		TheDisplay->draw();
 
 	setFPMode();
 }

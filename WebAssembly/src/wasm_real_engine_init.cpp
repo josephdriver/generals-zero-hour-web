@@ -940,6 +940,16 @@ struct RealEngineInitState {
 
 RealEngineInitState g_state;
 bool g_direct_skirmish_active = false;
+bool g_browser_match_active = false;
+bool g_browser_match_terminal = false;
+struct BrowserMatchStats {
+    unsigned long long infantry = 0, vehicles = 0, aircraft = 0, buildings = 0, harvested = 0, spent = 0;
+    Int color = -1, unitsKilled = 0, buildingsKilled = 0, unitsLost = 0, buildingsLost = 0;
+    UnsignedInt remaining = 0;
+    bool captured = false;
+    const char *outcome = "unknown";
+};
+BrowserMatchStats g_browser_match_stats[MAX_PLAYER_COUNT];
 bool g_direct_skirmish_exit_requested = false;
 std::string g_state_json;
 // Opt-in only: default boots stay -noshellmap so harness expectations hold;
@@ -9000,6 +9010,223 @@ extern "C" EMSCRIPTEN_KEEPALIVE const char *cnc_port_real_engine_lan_command(
 	return json.c_str();
 }
 
+
+extern "C" Bool cnc_port_browser_match_uses_host_loading()
+{
+    return g_browser_match_active;
+}
+
+extern "C" void cnc_port_browser_match_produced(Player *player, const Object *object, Bool building)
+{
+    if (!g_browser_match_active || !TheGameLogic || !TheGameLogic->isScoringEnabled() || !player || !object) return;
+    auto &stats = g_browser_match_stats[player->getPlayerIndex()];
+    if (building) ++stats.buildings;
+    else if (object->getTemplate()->isKindOf(KINDOF_AIRCRAFT)) ++stats.aircraft;
+    else if (object->getTemplate()->isKindOf(KINDOF_INFANTRY)) ++stats.infantry;
+    else if (object->getTemplate()->isKindOf(KINDOF_VEHICLE)) ++stats.vehicles;
+}
+
+extern "C" void cnc_port_browser_match_money(Player *player, UnsignedInt amount, Bool harvested)
+{
+    if (!g_browser_match_active || !player) return;
+    auto &stats = g_browser_match_stats[player->getPlayerIndex()];
+    if (harvested) stats.harvested += amount;
+    else stats.spent += amount;
+}
+
+static void capture_browser_player(Player *player, const GameSlot *slot, const char *outcome)
+{
+    auto &stats = g_browser_match_stats[player->getPlayerIndex()];
+    stats.outcome = outcome;
+    if (stats.captured) return;
+    stats.color = slot->getColor();
+    stats.unitsKilled = player->getScoreKeeper()->getTotalUnitsDestroyed();
+    stats.buildingsKilled = player->getScoreKeeper()->getTotalBuildingsDestroyed();
+    stats.unitsLost = player->getScoreKeeper()->getTotalUnitsLost();
+    stats.buildingsLost = player->getScoreKeeper()->getTotalBuildingsLost();
+    stats.remaining = player->getMoney()->countMoney();
+    stats.captured = true;
+}
+
+extern "C" void cnc_port_capture_browser_match_defeat(Int slot_num, Player *player)
+{
+    if (!g_browser_match_active || !TheGameInfo || !player) return;
+    const GameSlot *slot = TheGameInfo->getConstSlot(slot_num);
+    if (slot && slot->isOccupied()) capture_browser_player(player, slot, "defeated");
+}
+
+extern "C" void cnc_port_capture_browser_match_result()
+{
+    if (!g_browser_match_active || !TheGameInfo || !TheVictoryConditions ||
+        !TheVictoryConditions->getEndFrame() || (TheNetwork && TheNetwork->sawCRCMismatch())) return;
+    for (Int i = 0; i < MAX_SLOTS; ++i) {
+        const GameSlot *slot = TheGameInfo->getConstSlot(i);
+        Player *player = find_llm_ai_slot_player(i);
+        if (!slot || !slot->isOccupied() || !player) continue;
+        const char *outcome = TheVictoryConditions->hasAchievedVictory(player) ? "won"
+            : TheVictoryConditions->hasBeenDefeated(player) ? "defeated" : "unknown";
+        capture_browser_player(player, slot, outcome);
+    }
+    g_browser_match_terminal = true;
+}
+
+// Battlewire has already agreed on the roster and connected every assigned
+// endpoint. Initialize the same LANGameInfo and network as the native menu.
+extern "C" EMSCRIPTEN_KEEPALIVE const char *cnc_port_real_engine_start_browser_match(
+    const char *map, Int seed, Int cash, Int restricted, UnsignedInt local_ip, const char *roster)
+{
+    if (!TheMapCache || !TheGameLogic || !TheMessageStream || !TheWritableGlobalData
+        || !ThePlayerTemplateStore || !map || !roster || !local_ip || cash < 1000 || cash > 50000)
+        return "{\"ok\":false,\"error\":\"invalidMatchSetup\"}";
+    if (TheGameLogic->isInGame() || TheNetwork || (TheLAN && TheLAN->GetMyGame()))
+        return "{\"ok\":false,\"error\":\"matchAlreadyStarted\"}";
+
+    AsciiString key(map);
+    key.toLower();
+    const MapMetaData *metadata = TheMapCache->findMap(key);
+    if (!metadata || !metadata->m_isOfficial || !metadata->m_isMultiplayer)
+        return "{\"ok\":false,\"error\":\"mapUnavailable\"}";
+
+    std::istringstream rows(roster);
+    std::string row;
+    std::vector<LANGameSlot> slots;
+    std::vector<UnsignedInt> addresses;
+    bool colors[MAX_SLOTS] = {}, starts[MAX_SLOTS] = {};
+    while (std::getline(rows, row)) {
+        std::istringstream fields(row);
+        std::string faction, name, extra;
+        Int color, position, team, difficulty;
+        UnsignedInt ip;
+        if (!(fields >> faction >> color >> position >> team >> difficulty >> ip) ||
+            !std::getline(fields >> std::ws, name) || name.empty() ||
+            slots.size() >= MAX_SLOTS || color < 0 || color >= MAX_SLOTS ||
+            position < 0 || position >= metadata->m_numPlayers || position >= MAX_SLOTS ||
+            team < -1 || team >= MAX_SLOTS || difficulty < -1 || difficulty > 2 ||
+            (difficulty == -1 ? ((ip & 0xffffff00u) != 0x0a000000u || (ip & 255u) < 1 ||
+                (ip & 255u) > MAX_SLOTS || std::find(addresses.begin(), addresses.end(), ip) != addresses.end()) : ip != 0) ||
+            (slots.empty() && difficulty != -1) || colors[color] || starts[position])
+            return "{\"ok\":false,\"error\":\"invalidRoster\"}";
+
+        Int template_index = PLAYERTEMPLATE_RANDOM;
+        if (faction != "Random") {
+            const PlayerTemplate *entry = find_player_template_by_name(faction.c_str(), &template_index);
+            if (!entry || !entry->isPlayableSide())
+                return "{\"ok\":false,\"error\":\"invalidFaction\"}";
+        }
+        if (ip) addresses.push_back(ip);
+        colors[color] = starts[position] = true;
+        UnicodeString display_name;
+        display_name.translate(AsciiString(name.c_str()));
+        LANGameSlot slot;
+        slot.setState(difficulty == -1 ? SLOT_PLAYER : static_cast<SlotState>(SLOT_EASY_AI + difficulty),
+            display_name, ip);
+        slot.setPort(8088);
+        slot.setPlayerTemplate(template_index);
+        slot.setColor(color);
+        slot.setStartPos(position);
+        slot.setTeamNumber(team);
+        slot.setMapAvailability(TRUE);
+        slot.setAccept();
+        slot.setLastHeard(0);
+        slots.push_back(slot);
+    }
+    if (addresses.size() < 2 || slots.size() > static_cast<unsigned>(metadata->m_numPlayers)
+        || std::find(addresses.begin(), addresses.end(), local_ip) == addresses.end())
+        return "{\"ok\":false,\"error\":\"invalidPlayerCount\"}";
+
+    if (!TheLAN) {
+        TheLAN = NEW LANAPI();
+        TheLAN->init();
+    }
+    LANGameInfo *game = NEW LANGameInfo;
+    game->setName(UnicodeString(L"Battlewire"));
+    game->setLocalIP(local_ip);
+    game->enterGame();
+    game->setMap(key);
+    game->setMapCRC(metadata->m_CRC);
+    game->setMapSize(metadata->m_filesize);
+    game->setSeed(seed);
+    Money money;
+    money.deposit(cash, FALSE);
+    game->setStartingCash(money);
+    game->setSuperweaponRestriction(restricted ? 1 : 0);
+    for (Int i = 0; i < MAX_SLOTS; ++i) {
+        if (i < static_cast<Int>(slots.size())) {
+            game->setSlot(i, slots[i]);
+        } else {
+            LANGameSlot closed;
+            closed.setState(SLOT_CLOSED, UnicodeString::TheEmptyString);
+            game->setSlot(i, closed);
+        }
+    }
+    if (TheShell) {
+        TheShell->hideShell();
+        while (TheShell->top()) TheShell->popImmediate();
+    }
+    if (!TheLAN->startBrowserMatch(game, local_ip))
+        return "{\"ok\":false,\"error\":\"nativeLanStartFailed\"}";
+
+    g_direct_skirmish_active = true;
+    g_direct_skirmish_exit_requested = false;
+    g_browser_match_active = true;
+    g_browser_match_terminal = false;
+    for (auto &entry : g_browser_match_stats) entry = BrowserMatchStats();
+    return "{\"ok\":true}";
+}
+
+extern "C" EMSCRIPTEN_KEEPALIVE const char *cnc_port_real_engine_browser_match_surrender()
+{
+    if (!g_browser_match_active || g_browser_match_terminal || !TheVictoryConditions ||
+        TheVictoryConditions->isLocalDefeat() || !TheGameLogic || !TheGameLogic->isInGame() ||
+        TheGameLogic->getGameMode() != GAME_LAN || !TheMessageStream)
+        return "{\"ok\":false,\"error\":\"surrenderUnavailable\"}";
+    // Same native command as QuitMenu's surrender action.
+    TheMessageStream->appendMessage(GameMessage::MSG_SELF_DESTRUCT)->appendBooleanArgument(TRUE);
+    return "{\"ok\":true}";
+}
+
+extern "C" EMSCRIPTEN_KEEPALIVE const char *cnc_port_real_engine_browser_match_status()
+{
+    static std::string json;
+    const bool loading = TheGameLogic && (TheGameLogic->isLoadSessionActive() || TheGameLogic->isLoadingMap());
+    const Int frame = TheGameLogic ? TheGameLogic->getFrame() : 0;
+    const bool ready = TheNetwork && TheGameLogic && TheGameLogic->isInGame()
+        && TheGameLogic->getGameMode() == GAME_LAN && !loading && frame > 0;
+    json = "{\"ok\":true,\"logicFrame\":" + std::to_string(frame);
+    json += ",\"ready\":";
+    json += ready ? "true" : "false";
+    json += ",\"exitRequested\":";
+    json += g_direct_skirmish_exit_requested ? "true" : "false";
+    json += ",\"failed\":";
+    json += g_frame_state.exception_caught ? "true" : "false";
+    json += ",\"desync\":";
+    json += TheNetwork && TheNetwork->sawCRCMismatch() ? "true" : "false";
+    json += ",\"loadProgress\":" + std::to_string(TheGameLogic ? TheGameLogic->getLoadSessionProgress() : 0);
+    json += ",\"terminal\":";
+    json += g_browser_match_terminal ? "true" : "false";
+    json += ",\"stats\":[";
+    bool first = true;
+    for (const auto &stats : g_browser_match_stats) {
+        if (!stats.captured) continue;
+        if (!first) json += ",";
+        first = false;
+        json += "{\"color\":" + std::to_string(stats.color) + ",\"outcome\":\"" + stats.outcome + "\",\"counters\":{";
+        json += "\"infantry_produced\":" + std::to_string(stats.infantry);
+        json += ",\"vehicles_produced\":" + std::to_string(stats.vehicles);
+        json += ",\"aircraft_produced\":" + std::to_string(stats.aircraft);
+        json += ",\"buildings_produced\":" + std::to_string(stats.buildings);
+        json += ",\"units_killed\":" + std::to_string(stats.unitsKilled);
+        json += ",\"buildings_killed\":" + std::to_string(stats.buildingsKilled);
+        json += ",\"units_lost\":" + std::to_string(stats.unitsLost);
+        json += ",\"buildings_lost\":" + std::to_string(stats.buildingsLost);
+        json += ",\"credits_harvested\":" + std::to_string(stats.harvested);
+        json += ",\"credits_spent\":" + std::to_string(stats.spent);
+        json += ",\"credits_remaining\":" + std::to_string(stats.remaining);
+        json += "}}";
+    }
+    json += "]}";
+    return json.c_str();
+}
 
 // Native stats-screen Exit is routed to an embedding host only for direct launches.
 extern "C" int cnc_port_real_engine_request_host_exit()

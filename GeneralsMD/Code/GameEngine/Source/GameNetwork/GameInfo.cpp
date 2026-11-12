@@ -978,7 +978,7 @@ Bool GameInfo::isSandbox(void)
 
 static const char slotListID		= 'S';
 
-AsciiString GameInfoToAsciiString( const GameInfo *game )
+AsciiString GameInfoToAsciiString( const GameInfo *game, Bool limitToLanPacket )
 {
 	if (!game)
 		return AsciiString::TheEmptyString;
@@ -1030,15 +1030,23 @@ AsciiString GameInfoToAsciiString( const GameInfo *game )
 				slot->getColor(), slot->getPlayerTemplate(),
 				slot->getStartPos(), slot->getTeamNumber(),
 				slot->getNATBehavior() );
-			//make sure name doesn't cause overflow of m_lanMaxOptionsLength
-			int lenCur = tmp.getLength() + optionsString.getLength() + 2;  //+2 for H and trailing ;
-			int lenRem = m_lanMaxOptionsLength - lenCur;  //length remaining before overflowing
-			int lenMax = lenRem / (MAX_SLOTS-i);  //share lenRem with all remaining slots
-			AsciiString name = WideCharStringToMultiByte(slot->getName().str()).c_str();
-			while( name.getLength() > lenMax )
-				name.removeLastChar();  //what a horrible way to truncate.  I hate AsciiString.
-			
-			str.format( "H%s%s", name.str(), tmp.str() );
+			std::string name = WideCharStringToMultiByte(slot->getName().str());
+			if (limitToLanPacket)
+			{
+				// Share the remaining name budget with the remaining slots.
+				const Int remaining = m_lanMaxOptionsLength - tmp.getLength() - optionsString.getLength() - 2;
+				const Int nameLimit = (remaining > 0 ? remaining : 0) / (MAX_SLOTS - i);
+				if (name.size() > static_cast<size_t>(nameLimit))
+					name.resize(nameLimit);
+			}
+			else
+			{
+				// The replay parser uses these characters to separate fields and slots.
+				for (char &character : name)
+					if (character == ',' || character == ':' || character == ';')
+						character = '-';
+			}
+			str.format( "H%s%s", name.c_str(), tmp.str() );
 		}
 		else if (slot && slot->isAI())
 		{
@@ -1070,7 +1078,7 @@ AsciiString GameInfoToAsciiString( const GameInfo *game )
 	}
 	optionsString.concat(';');
 
-	DEBUG_ASSERTCRASH(!TheLAN || (optionsString.getLength() < m_lanMaxOptionsLength),
+	DEBUG_ASSERTCRASH(!limitToLanPacket || !TheLAN || (optionsString.getLength() < m_lanMaxOptionsLength),
 		("WARNING: options string is longer than expected!  Length is %d, but max is %d!\n",
 		optionsString.getLength(), m_lanMaxOptionsLength));
 	

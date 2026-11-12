@@ -37,6 +37,10 @@
 #include "GameClient/InGameUI.h"
 #include "GameClient/GameText.h"
 
+#ifdef __EMSCRIPTEN__
+extern "C" void cnc_port_browser_match_money(Player *player, UnsignedInt amount, Bool harvested);
+#endif
+
 #ifdef _INTERNAL
 // for occasional debugging...
 //#pragma optimize("", off)
@@ -110,6 +114,9 @@ Bool SupplyCenterDockUpdate::action( Object* docker, Object *drone )
 	{
 		Money *ownerPlayerMoney = ownerPlayer->getMoney();
 		ownerPlayerMoney->deposit(value);
+#ifdef __EMSCRIPTEN__
+        cnc_port_browser_match_money(ownerPlayer, value, TRUE);
+#endif
 		ownerPlayer->getScoreKeeper()->addMoneyEarned(value);
 
 

@@ -888,6 +888,18 @@ void LANAPI::RequestChat( UnicodeString message, ChatType format )
 	OnChat(m_name, m_localIP, message, format);
 }
 
+#ifdef __EMSCRIPTEN__
+Bool LANAPI::startBrowserMatch(LANGameInfo *game, UnsignedInt localIP)
+{
+	m_localIP = localIP;
+	m_currentGame = game;
+	m_inLobby = false;
+	addGame(game);
+	OnGameStart();
+	return TheNetwork != NULL;
+}
+#endif
+
 void LANAPI::RequestGameStart( void )
 {
 	if (m_inLobby || !m_currentGame || m_currentGame->getIP(0) != m_localIP)

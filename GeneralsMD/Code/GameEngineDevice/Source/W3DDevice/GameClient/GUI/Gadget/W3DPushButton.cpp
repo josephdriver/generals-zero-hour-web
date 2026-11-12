@@ -46,6 +46,7 @@
 
 // SYSTEM INCLUDES ////////////////////////////////////////////////////////////
 #include <stdlib.h>
+#include <string.h>
 
 // USER INCLUDES //////////////////////////////////////////////////////////////
 #include "GameClient/Gadget.h"
@@ -315,6 +316,27 @@ void W3DGadgetPushButtonImageDraw( GameWindow *window,
 	}
 }
 
+#ifdef __EMSCRIPTEN__
+static void fitControlBarCard( GameWindow *window, WinInstanceData *instData,
+                               ICoord2D &position, ICoord2D &size )
+{
+	const char *name = instData->m_decoratedNameString.str();
+	const bool isCard = BitTest(window->winGetStatus(), WIN_STATUS_USE_OVERLAY_STATES)
+		|| strcmp(name, "ControlBar.wnd:CameoWindow") == 0
+		|| strncmp(name, "ControlBar.wnd:ButtonQueue", sizeof("ControlBar.wnd:ButtonQueue") - 1) == 0;
+	const Int width = TheDisplay->getWidth();
+	const Int height = TheDisplay->getHeight();
+	if (!isCard || width <= 0 || height <= 0 || 3 * width <= 4 * height)
+		return;
+
+	// WND positions scale horizontally with the display. Keep the original
+	// 4:3 card proportions inside those positions and retain the full hit area.
+	const Int fittedWidth = size.x * 4 * height / (3 * width);
+	position.x += (size.x - fittedWidth) / 2;
+	size.x = fittedWidth;
+}
+#endif
+
 void W3DGadgetPushButtonImageDrawOne( GameWindow *window, 
 																	 WinInstanceData *instData )
 {
@@ -367,6 +389,9 @@ void W3DGadgetPushButtonImageDrawOne( GameWindow *window,
 		window->winGetSize( &size.x, &size.y );
 
 
+#ifdef __EMSCRIPTEN__
+		fitControlBarCard(window, instData, start, size);
+#endif
 		// offset position by image offset
 		start.x += instData->m_imageOffset.x;
 		start.y += instData->m_imageOffset.y;
@@ -408,7 +433,9 @@ void W3DGadgetPushButtonImageDrawOne( GameWindow *window,
 	// get window position
 	window->winGetScreenPosition( &start.x, &start.y );
 	window->winGetSize( &size.x, &size.y );
-
+#ifdef __EMSCRIPTEN__
+	fitControlBarCard(window, instData, start, size);
+#endif
 
 	// if we have a video buffer, draw the video buffer
 	if ( instData->m_videoBuffer )

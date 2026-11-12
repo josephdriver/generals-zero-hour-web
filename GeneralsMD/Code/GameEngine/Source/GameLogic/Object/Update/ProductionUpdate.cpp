@@ -55,6 +55,10 @@
 #include "GameLogic/Object.h"
 #include "GameLogic/ScriptEngine.h"
 
+#ifdef __EMSCRIPTEN__
+extern "C" void cnc_port_browser_match_money(Player *player, UnsignedInt amount, Bool harvested);
+#endif
+
 #ifdef _INTERNAL
 // for occasional debugging...
 //#pragma optimize("", off)
@@ -303,7 +307,12 @@ Bool ProductionUpdate::queueUpgrade( const UpgradeTemplate *upgrade )
 
 	// take the cost for the build away from the player
 	Money *money = player->getMoney();
-	money->withdraw( upgrade->calcCostToBuild( player ) );
+	#ifdef __EMSCRIPTEN__
+        const UnsignedInt spent = money->withdraw( upgrade->calcCostToBuild( player ) );
+        cnc_port_browser_match_money(player, spent, FALSE);
+#else
+        money->withdraw( upgrade->calcCostToBuild( player ) );
+#endif
 
 	// allocate a new production entry
 	ProductionEntry *production = newInstance(ProductionEntry);
@@ -427,7 +436,12 @@ Bool ProductionUpdate::queueCreateUnit( const ThingTemplate *unitType, Productio
 	// take the cost for the build away from the player
 	Player *player = getObject()->getControllingPlayer();
 	Money *money = player->getMoney();
-	money->withdraw( unitType->calcCostToBuild( player ) );
+	#ifdef __EMSCRIPTEN__
+        const UnsignedInt spent = money->withdraw( unitType->calcCostToBuild( player ) );
+        cnc_port_browser_match_money(player, spent, FALSE);
+#else
+        money->withdraw( unitType->calcCostToBuild( player ) );
+#endif
 
 	// allocate a new production entry
 	ProductionEntry *production = newInstance(ProductionEntry);

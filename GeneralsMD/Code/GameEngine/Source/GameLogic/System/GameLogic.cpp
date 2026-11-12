@@ -1853,9 +1853,7 @@ Bool GameLogic::runNextLoadStep( void )
 				}
 			}
 
-			AsciiString slotNameAscii;
-			slotNameAscii.translate(slot->getName());
-			if (slot->isHuman() && game->getSlotNum(slotNameAscii) == game->getLocalSlotNum()) {
+			if (slot->isHuman() && i == game->getLocalSlotNum()) {
 				localSlot = i;
 			}
 			TheSidesList->addSide(&d);
@@ -2950,6 +2948,12 @@ Bool GameLogic::runNextLoadStep( void )
 	else
 	{
 		ShowControlBar(FALSE);
+#ifdef __EMSCRIPTEN__
+		// The browser cannot warp the desktop cursor. Center the engine's
+		// pointer so its default (0, 0) cannot scroll away from the starting base.
+		if (TheMouse != NULL && TheDisplay != NULL)
+			TheMouse->setPosition(TheDisplay->getWidth() / 2, TheDisplay->getHeight() / 2);
+#endif
 	}
 
 #ifdef DO_UNIT_TIMINGS
