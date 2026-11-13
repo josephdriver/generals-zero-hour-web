@@ -637,8 +637,10 @@ Bool GameEngine::runNextInitStep( void )
 		case InitSession::INIT_STEP_AUDIO:
 		{
 		initSubsystem(TheAudio,"TheAudio", createAudioManager(), NULL);
+#ifndef __EMSCRIPTEN__
 		if (!TheAudio->isMusicAlreadyLoaded())
 			setQuitting(TRUE);
+#endif
 
 	#ifdef DUMP_PERF_STATS///////////////////////////////////////////////////////////////////////////
 	GetPrecisionTimer(&s->endTime64);//////////////////////////////////////////////////////////////////

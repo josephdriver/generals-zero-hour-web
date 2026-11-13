@@ -12840,6 +12840,7 @@ async function mountPreparedArchives(payload = {}) {
   const archives = [];
   const stageMap = {};
   let installedRootName = null;
+  const packedRoots = new Set();
   for (const input of archiveInputs) {
     const name = String(input?.name ?? "");
     const opfsPath = String(input?.opfsPath ?? "").replace(/^\/+/, "");
@@ -12856,7 +12857,13 @@ async function mountPreparedArchives(payload = {}) {
         error: `Prepared archive is outside managed launcher storage: ${opfsPath}`,
       };
     }
-    if (inInstalledLibrary) {
+    if (inInstalledLibrary && installedMatch[1].startsWith("install-pack-")) {
+      const digest = String(input.sha256 ?? "");
+      if (!/^[a-f0-9]{64}$/.test(digest) || installedMatch[1] !== `install-pack-${digest}`) {
+        return { ok: false, command: "mountPreparedArchives", error: "Invalid packed archive identity" };
+      }
+      packedRoots.add(installedMatch[1]);
+    } else if (inInstalledLibrary) {
       if (installedRootName && installedRootName !== installedMatch[1]) {
         return { ok: false, command: "mountPreparedArchives", error: "Installed archives span multiple library roots" };
       }
@@ -12937,7 +12944,12 @@ async function mountPreparedArchives(payload = {}) {
     skipBinkRuntimeFiles();
   }
 
+  if (packedRoots.size && (installedRootName || archives.some(
+    ({ opfsPath }) => !opfsPath.startsWith("cnc-library/install-pack-")) || preparedVideos.length)) {
+    return { ok: false, command: "mountPreparedArchives", error: "Packed archives require dedicated library roots" };
+  }
   if (installedRootName) await acquireOpfsInstallLock(installedRootName);
+  await Promise.all([...packedRoots].map(acquireOpfsInstallLock));
 
   const prefix = baseDirectory.endsWith("/") ? baseDirectory : `${baseDirectory}/`;
   const registered = await registerOpfsInterceptPrefix(prefix);

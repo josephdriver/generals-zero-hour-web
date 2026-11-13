@@ -233,6 +233,7 @@ void AudioManager::init()
 	// do the miscellaneous sound files last so that we find the audioeventrts associated with the events.
 	ini.load( AsciiString( "Data\\INI\\MiscAudio.ini" ), INI_LOAD_OVERWRITE, NULL);
 	
+#ifndef __EMSCRIPTEN__
 	// determine if one of the music tracks exists. Since their now BIGd, one implies all.
 	// If they don't exist, then attempt to load them from the CD. 
 	if (!isMusicAlreadyLoaded()) 
@@ -262,6 +263,8 @@ void AudioManager::init()
 		}
 	}
 	
+#endif
+
 	m_music = NEW MusicManager;
 	m_sound = NEW SoundManager;
 
