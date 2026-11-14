@@ -279,6 +279,35 @@ void HideQuitMenu( void )
 }
 
 //-------------------------------------------------------------------------------------------------
+#ifdef __EMSCRIPTEN__
+void ResetQuitMenuAfterResize()
+{
+	if (quitMenuLayout == NULL)
+		return;
+
+	// Finish only pause menu transitions before destroying their windows.
+	if (TheTransitionHandler != NULL)
+	{
+		const auto pending = TheTransitionHandler->getPendingGroupName();
+		const auto current = TheTransitionHandler->getCurrentGroupName();
+		const auto isQuitTransition = [](const AsciiString &name) {
+			return name == "QuitFull" || name == "QuitFullBack"
+				|| name == "QuitNoSave" || name == "QuitNoSaveBack";
+		};
+		if (isQuitTransition(pending))
+			TheTransitionHandler->remove(pending);
+		if (isQuitTransition(current))
+			TheTransitionHandler->remove(current);
+	}
+	if (quitConfirmationWindow != NULL)
+		TheWindowManager->winDestroy(quitConfirmationWindow);
+	if (isVisible && !TheGameLogic->isInMultiplayerGame())
+		TheGameLogic->setGamePaused(FALSE);
+	TheInGameUI->setQuitMenuVisible(FALSE);
+	destroyQuitMenu();
+}
+#endif
+
 /** Toggle visibility of the quit menu */
 //-------------------------------------------------------------------------------------------------
 void ToggleQuitMenu()
