@@ -6037,6 +6037,8 @@ extern "C" EMSCRIPTEN_KEEPALIVE const char *cnc_port_real_engine_frame_summary(i
 //     TheShell or the running game, so the match keeps running (units stay
 //     selected, camera stays put) and only the render target + HUD change.
 // Returns a small JSON blob describing the applied size and which reflow ran.
+extern void ResetQuitMenuAfterResize();
+
 extern "C" EMSCRIPTEN_KEEPALIVE const char *cnc_port_real_engine_set_resolution(int xres, int yres)
 {
 	static std::string result_json;
@@ -6128,6 +6130,7 @@ extern "C" EMSCRIPTEN_KEEPALIVE const char *cnc_port_real_engine_set_resolution(
 				// LIGHT in-place resize: keep the running game, units, and camera.
 				// Only the render target + HUD layout change.
 				reflow_mode = "in-place";
+				ResetQuitMenuAfterResize();
 				// Rebuild the command bar / control bar at the new resolution
 				// (deletes + recreates the ControlBar.wnd and TheControlBar in
 				// place; does NOT touch TheShell or the game state).
